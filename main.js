@@ -38,8 +38,20 @@ camera.position.set(0, 0.15, 8.6); // fără text mare peste roată — obiectul
 // dungile lor reflectate sunt singurul mod în care sticla se citește pe întuneric.
 function buildEnvScene() {
   const env = new THREE.Scene();
+  // gradient moale pe panouri: dreptunghiurile albe cu margini dure se reflectă
+  // ca "plastic de showroom" — miez luminos cu falloff = reflexii organice
+  const gc = document.createElement('canvas');
+  gc.width = gc.height = 128;
+  const gcx = gc.getContext('2d');
+  const gg = gcx.createRadialGradient(64, 64, 6, 64, 64, 64);
+  gg.addColorStop(0, '#fff');
+  gg.addColorStop(0.55, '#555');
+  gg.addColorStop(1, '#000');
+  gcx.fillStyle = gg;
+  gcx.fillRect(0, 0, 128, 128);
+  const gradTex = new THREE.CanvasTexture(gc);
   const addFormer = (hex, intensity, w, h, x, y, z) => {
-    const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+    const mat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, map: gradTex });
     mat.color = new THREE.Color(hex).multiplyScalar(intensity);
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
     m.position.set(x, y, z);
@@ -101,19 +113,46 @@ glow.position.set(0, 0, -4.2);
 scene.add(glow);
 
 // ---------- Anvelopa de sticlă ----------
+// sticla CG pare "plastic ieftin" când suprafața e perfect uniformă;
+// o hartă de rugozitate cu pete o face să respire ca gheața reală
+function makeRoughnessNoise() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const cx = c.getContext('2d');
+  cx.fillStyle = 'rgb(58,58,58)';
+  cx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 900; i++) {
+    const g = Math.floor(26 + Math.random() * 90);
+    cx.fillStyle = `rgba(${g},${g},${g},0.35)`;
+    const r = 2 + Math.random() * 14;
+    cx.beginPath();
+    cx.arc(Math.random() * 256, Math.random() * 256, r, 0, 7);
+    cx.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+const glassNoise = makeRoughnessNoise();
+
 const glassMat = new THREE.MeshPhysicalMaterial({
   transmission: 1,
-  thickness: 1.2,
-  roughness: 0.11, // echilibru: reflexii moi dar sticlă clară, nu tulbure
+  thickness: 1.4,
+  roughness: 1, // valoarea reală vine din hartă: ~0.12–0.42, variată ca gheața
+  roughnessMap: glassNoise,
+  bumpMap: glassNoise,            // micro-relief: sparge și banding-ul din bufferul de transmisie
+  bumpScale: 0.015,
   metalness: 0,
-  ior: 1.45,
-  dispersion: isMobile ? 0 : 0.25, // interval valid 0–1; pe mobil o tăiem (cost de sampling)
-  attenuationColor: new THREE.Color(0xbfe8ff),
-  attenuationDistance: 2.0,
-  clearcoat: 1,
-  clearcoatRoughness: 0.08,
-  envMapIntensity: 0.9,
-  specularIntensity: 1,
+  ior: 1.31,                      // gheață reală (physicallybased.info), nu sticlă generică
+  dispersion: isMobile ? 0 : 0.15, // cu ior 1.31, dispersia mare arată a piatră prețioasă, nu a gheață
+  attenuationColor: new THREE.Color(0x9fc7db),
+  attenuationDistance: 0.9,       // umerii anvelopei se adâncesc vizibil în culoare
+  clearcoat: 0,                   // semnalul #1 de "plastic ud" — sticla reală nu are lac
+  envMapIntensity: 1.0,
+  specularIntensity: 0.6,
+  iridescence: 0.25,              // șoapta futuristă — sfertul valorii de balon de săpun
+  iridescenceIOR: 1.3,
+  iridescenceThicknessRange: [100, 400],
 });
 
 const tireGroup = new THREE.Group();   // orientarea generală (controlată de scroll + mouse)
@@ -312,6 +351,90 @@ const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({
 particles.frustumCulled = false;
 scene.add(particles);
 
+// ---------- Logo din praf — finalul igloo: literele se destramă sub cursor și se refac ----------
+const LOGO_CENTER = new THREE.Vector3(0, 0.95, -11);
+const dustPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 11); // planul z = -11
+const _dustHit = new THREE.Vector3();
+const dust = { count: 0, active: false };
+let dustPoints = null;
+let dustGeo = null;
+let dustHome = null;
+let dustPos = null;
+let dustVel = null;
+let dustSeed = null;
+let dustBaseCol = null;
+let dustColAttr = null;
+
+function buildDustLogo() {
+  const W = 1200;
+  const H = 240;
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const cx = cv.getContext('2d');
+  cx.fillStyle = '#fff';
+  cx.font = "700 168px 'Space Grotesk', sans-serif";
+  cx.textAlign = 'center';
+  cx.textBaseline = 'middle';
+  cx.fillText('VULCAN GLASS', W / 2, H / 2 + 8);
+  const img = cx.getImageData(0, 0, W, H).data;
+  const step = isMobile ? 4 : 3; // ~4-7k particule — CPU le duce lejer
+  const homes = [];
+  for (let y = 0; y < H; y += step) {
+    for (let x = 0; x < W; x += step) {
+      if (img[(y * W + x) * 4 + 3] > 120) homes.push(x, y);
+    }
+  }
+  const n = homes.length / 2;
+  dust.count = n;
+  const S = 3.4 / W; // lățimea logo-ului în unități de scenă
+  dustHome = new Float32Array(n * 3);
+  dustPos = new Float32Array(n * 3);
+  dustVel = new Float32Array(n * 3);
+  dustSeed = new Float32Array(n * 2); // fază + sensibilitate per particulă
+  const colors = new Float32Array(n * 3);
+  const cIce = new THREE.Color(0xbfe8ff);
+  const cWhite = new THREE.Color(0xf2f8ff);
+  const cAmber = new THREE.Color(0xffb36b);
+  for (let i = 0; i < n; i++) {
+    const hx = (homes[i * 2] - W / 2) * S + LOGO_CENTER.x;
+    const hy = (H / 2 - homes[i * 2 + 1]) * S + LOGO_CENTER.y;
+    const hz = LOGO_CENTER.z + (Math.random() - 0.5) * 0.12; // adâncime ușoară = praf, nu poster
+    dustHome[i * 3] = hx;
+    dustHome[i * 3 + 1] = hy;
+    dustHome[i * 3 + 2] = hz;
+    dustPos[i * 3] = hx;
+    dustPos[i * 3 + 1] = hy;
+    dustPos[i * 3 + 2] = hz;
+    dustSeed[i * 2] = Math.random() * Math.PI * 2;
+    dustSeed[i * 2 + 1] = 0.6 + Math.random() * 0.9;
+    const r = Math.random();
+    const c = r < 0.06 ? cAmber : r < 0.5 ? cIce : cWhite;
+    const glow = 0.9 + Math.random() * 0.8; // câteva scântei trec de threshold-ul de bloom
+    colors[i * 3] = c.r * glow;
+    colors[i * 3 + 1] = c.g * glow;
+    colors[i * 3 + 2] = c.b * glow;
+  }
+  dustBaseCol = colors.slice(); // culorile de bază; cele afișate se scalează cu viteza (semnătura igloo)
+  dustGeo = new THREE.BufferGeometry();
+  dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3).setUsage(THREE.DynamicDrawUsage));
+  dustColAttr = new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage);
+  dustGeo.setAttribute('color', dustColAttr);
+  dustPoints = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+    size: 0.026,
+    map: makeDotTexture(),
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.95,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true,
+  }));
+  dustPoints.frustumCulled = false;
+  dustPoints.visible = false;
+  scene.add(dustPoints);
+}
+
 // ---------- Post-processing ----------
 // MSAA direct pe render target-ul composer-ului (WebGL2) = anti-aliasing real,
 // iar HalfFloat previne banding-ul pe gradienturile întunecate
@@ -437,6 +560,8 @@ tl.to(cam, { x: 0, y: 0.7, z: 4.0, ty: 0.3, rotY: 0.15, spin: 0.3, glowO: 0.35, 
 tl.to(cam, { y: 3.2, z: 0.3, ty: 0, spin: 2.6, duration: 0.5 }, 3);
 // 04b — ...și coboară pe diagonală spate-lateral: roata la turație, halo-ul în spate, silueta lizibilă
 tl.to(cam, { x: -3.6, y: 0.9, z: -3.6, ty: 0, glowO: 0.4, spin: 1.2, duration: 0.5 }, 3.5);
+// 05 — camera se întoarce și zboară spre logo-ul din praf, adânc în scenă
+tl.to(cam, { x: 0, y: 0.35, z: -6.3, tx: 0, ty: 0.55, tz: -11, glowO: 0.08, spin: 0.35, duration: 1 }, 4);
 
 // fade-in / fade-out pe textele secțiunilor + titluri dezvăluite pe linii, cu mască
 document.querySelectorAll('.section .section-inner').forEach((el) => {
@@ -454,6 +579,7 @@ document.querySelectorAll('.section .section-inner').forEach((el) => {
   });
 });
 document.fonts.ready.then(() => {
+  buildDustLogo(); // fontul Space Grotesk trebuie încărcat înainte să-l desenăm pe canvas
   if (reducedMotion) return;
   document.querySelectorAll('.section h2').forEach((h) => {
     const split = SplitText.create(h, { type: 'lines', mask: 'lines' });
@@ -642,6 +768,60 @@ function renderFrame() {
       integrate(p, dt);
     }
     p.mesh.position.copy(p.pos).add(p.off);
+  }
+
+  // logo-ul din praf: activ doar în cadrul final; cursorul îl destramă, arcurile îl refac
+  dust.active = dustPoints !== null && cam.tz < -6;
+  if (dustPoints) dustPoints.visible = dust.active;
+  if (dust.active) {
+    const hitOk = pointerSeen && raycaster.ray.intersectPlane(dustPlane, _dustHit) !== null;
+    const R = 1.15;
+    const push = 6 * velBoost; // măturarea rapidă suflă praful mai tare
+    const damp = Math.max(0, 1 - 4.5 * dt);
+    for (let i = 0; i < dust.count; i++) {
+      const ix = i * 3;
+      const px = dustPos[ix];
+      const py = dustPos[ix + 1];
+      const pz = dustPos[ix + 2];
+      let fx = 0;
+      let fy = 0;
+      let fz = 0;
+      if (hitOk) {
+        const dx = px - _dustHit.x;
+        const dy = py - _dustHit.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < R * R) {
+          const d = Math.sqrt(d2) || 0.001;
+          const q = 1 - d / R;
+          const s = (push * q * q * dustSeed[i * 2 + 1]) / d;
+          fx = dx * s;
+          fy = dy * s;
+          fz = (dustSeed[i * 2] - Math.PI) * 0.1 * push * q * q; // puțină împrăștiere în adâncime
+        }
+      }
+      // drift permanent — praful nu stă niciodată perfect nemișcat
+      const ph = dustSeed[i * 2];
+      fx += Math.sin(t * 0.8 + ph) * 0.3;
+      fy += Math.cos(t * 0.63 + ph * 1.7) * 0.3;
+      // arcul moale care rescrie literele
+      fx += (dustHome[ix] - px) * 12;
+      fy += (dustHome[ix + 1] - py) * 12;
+      fz += (dustHome[ix + 2] - pz) * 12;
+      dustVel[ix] = (dustVel[ix] + fx * dt) * damp;
+      dustVel[ix + 1] = (dustVel[ix + 1] + fy * dt) * damp;
+      dustVel[ix + 2] = (dustVel[ix + 2] + fz * dt) * damp;
+      dustPos[ix] += dustVel[ix] * dt;
+      dustPos[ix + 1] += dustVel[ix + 1] * dt;
+      dustPos[ix + 2] += dustVel[ix + 2] * dt;
+      // semnătura igloo: praful în mișcare se aprinde, praful așezat abia mocnește
+      const sp = Math.abs(dustVel[ix]) + Math.abs(dustVel[ix + 1]) + Math.abs(dustVel[ix + 2]);
+      const br = Math.min(0.72 + sp * 1.6, 2.4);
+      dustColAttr.array[ix] = dustBaseCol[ix] * br;
+      dustColAttr.array[ix + 1] = dustBaseCol[ix + 1] * br;
+      dustColAttr.array[ix + 2] = dustBaseCol[ix + 2] * br;
+    }
+    dustGeo.attributes.position.needsUpdate = true;
+    dustColAttr.needsUpdate = true;
   }
 
   // ninsoare fină; la scroll rapid cade în dâre, ca prin viteză
