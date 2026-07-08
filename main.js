@@ -31,7 +31,7 @@ scene.background = new THREE.Color(0x04080f);
 scene.fog = new THREE.FogExp2(0x04080f, 0.02);
 
 const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 60);
-camera.position.set(0, 0.95, 8.6); // cameră dreaptă, țintă sus → roata stă în jumătatea de jos, sub text
+camera.position.set(0, 0.15, 8.6); // fără text mare peste roată — obiectul stă în centru, ca la igloo
 
 // ---------- Environment (reflexiile din sticlă vin de aici) ----------
 // Fundalul rămâne negru, dar mediul are câteva panouri luminoase ("lightformers"):
@@ -403,8 +403,8 @@ gsap.ticker.lagSmoothing(0);
 
 // proxy-ul animat de scroll; camera îl urmărește în bucla de randare
 const cam = {
-  x: 0, y: 0.95, z: 8.6,       // poziția camerei
-  tx: 0, ty: 0.95, tz: 0,      // punctul privit (sus → roata apare jos în cadru)
+  x: 0, y: 0.15, z: 8.6,       // poziția camerei
+  tx: 0, ty: 0.15, tz: 0,      // punctul privit — roata centrată, nimic peste ea
   rotY: 0.55,                  // unghiul anvelopei (three-quarter la început)
   spin: 0.22,                  // viteza de rotație a roții
   glowO: 0.85,                 // opacitatea halo-ului
@@ -745,7 +745,7 @@ Promise.all([pageLoaded, shadersCompiled]).then(() => {
       gsap.to(ringBase, { v: 0.9, duration: 1.2, ease: 'power3.out', delay: 1.3 });
     }
 
-    gsap.from('.hero-inner > *', {
+    gsap.from('.hero-caption > *', {
       opacity: 0,
       y: 40,
       duration: 1.1,
